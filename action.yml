@@ -1,7 +1,5 @@
 name: 'Deploy to Evolving Edge CDN'
-description: >-
-  Publish a built static site to the Evolving Edge CDN as an .ee workload.
-  Wraps ee-deploy; the calling workflow needs no Node setup of its own.
+description: 'Deploy a built static site to the Evolving Edge CDN, from any generator, with no Node.js setup step.'
 branding:
   icon: 'upload-cloud'
   color: 'purple'
