@@ -3,6 +3,6 @@
   "private": true,
   "description": "Pins the ee-cdn-cli version this Action runs. Bump it with a PR, then tag a new release.",
   "dependencies": {
-    "@evolving-edge/ee-cdn-cli": "0.4.0"
+    "@evolving-edge/ee-cdn-cli": "0.4.1"
   }
 }
