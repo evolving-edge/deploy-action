@@ -1,0 +1,14 @@
+# npm: opens a PR when a new @evolving-edge/ee-cdn-cli is published. Merging it
+# changes nothing for users until a new release of this Action is tagged.
+# github-actions: keeps the SHA-pinned actions in action.yml and the workflows
+# current.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

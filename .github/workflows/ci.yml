@@ -1,0 +1,125 @@
+name: CI
+
+# Runs on every PR (Dependabot's included) and on main. Nothing here uploads:
+# every run of the Action is a dry run, which needs no token, so PRs from forks
+# are tested the same way.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    name: Pinned CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.12'
+
+      # The same install as action.yml. npm ci also fails if package.json and
+      # package-lock.json disagree.
+      - name: Install as the Action does, and check the version
+        run: |
+          dir="$RUNNER_TEMP/cli"
+          mkdir -p "$dir"
+          cp package.json package-lock.json "$dir/"
+          npm ci --prefix "$dir" --ignore-scripts --no-audit --no-fund
+          pinned=$(node -p 'require("./package.json").dependencies["@evolving-edge/ee-cdn-cli"]')
+          reported=$(node "$dir/node_modules/@evolving-edge/ee-cdn-cli/bin/ee-deploy.js" --version)
+          echo "package.json pins $pinned; the installed CLI reports $reported"
+          test "$pinned" = "$reported" || { echo "::error::package.json pins $pinned but the CLI installed is $reported"; exit 1; }
+
+      # "Change the uses: line" is how users move from evolving-edge/ee-cdn-cli
+      # to this Action (#833 in ee-cdn). That holds only while both take the same
+      # inputs, with the same required flags and defaults, and give the same
+      # outputs. Compared with ee-cdn-cli's action.yml at the version pinned here.
+      - name: Inputs and outputs match ee-cdn-cli's action.yml
+        run: |
+          pinned=$(node -p 'require("./package.json").dependencies["@evolving-edge/ee-cdn-cli"]')
+          curl -fsSL "https://raw.githubusercontent.com/evolving-edge/ee-cdn-cli/v$pinned/action.yml" -o "$RUNNER_TEMP/cli-action.yml"
+          contract='{"inputs": (.inputs | with_entries(.value = {"required": (.value.required // false), "default": (.value.default // "")})), "outputs": (.outputs | keys)}'
+          yq -o=json "$contract" "$RUNNER_TEMP/cli-action.yml" > "$RUNNER_TEMP/cli.json"
+          yq -o=json "$contract" action.yml > "$RUNNER_TEMP/this.json"
+          if ! diff -u "$RUNNER_TEMP/cli.json" "$RUNNER_TEMP/this.json"; then
+            echo "::error::action.yml's inputs or outputs differ from evolving-edge/ee-cdn-cli v$pinned (lines with - are ee-cdn-cli's, + are this Action's)"
+            exit 1
+          fi
+          echo "Same $(yq '.inputs | length' action.yml) inputs and $(yq '.outputs | length' action.yml) output(s) as ee-cdn-cli v$pinned."
+
+  dry-run:
+    name: Dry run (${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # runner: the image's own Node, used as is if it is 22.12 or later.
+        # current: Node 24 set up first; the Action must keep it.
+        # none: Node removed, as on a Hugo, Jekyll or Python runner; the Action sets up 22.12.
+        node: [runner, current, none]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 24
+        if: matrix.node == 'current'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+
+      - name: Remove the runner's Node
+        if: matrix.node == 'none'
+        run: |
+          while command -v node >/dev/null 2>&1; do sudo rm -f "$(command -v node)"; hash -r; done
+          echo "node on PATH: $(command -v node || echo none)"
+
+      - name: Node before the Action
+        id: before
+        run: echo "version=$(node --version 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+
+      - id: deploy
+        uses: ./
+        with:
+          directory: ./test/site
+          domain: ci.example.com
+          dry-run: 'true'
+
+      - name: Check the url output and the Node left on PATH
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          BEFORE: ${{ steps.before.outputs.version }}
+          MATRIX_NODE: ${{ matrix.node }}
+        run: |
+          test -z "$URL" || { echo "::error::a dry run should leave url empty, got '$URL'"; exit 1; }
+          after=$(node --version)
+          echo "Node before: $BEFORE; after: $after"
+          case "$MATRIX_NODE" in
+            current) test "$after" = "$BEFORE" || { echo "::error::the Action replaced a new enough Node ($BEFORE -> $after)"; exit 1; } ;;
+            none) case "$after" in v22.12.*) ;; *) echo "::error::expected Node 22.12 to be set up, got $after"; exit 1 ;; esac ;;
+          esac
+
+      # The level guard in action.yml runs before the CLI. Level 1 must be refused.
+      - id: level1
+        uses: ./
+        continue-on-error: true
+        with:
+          directory: ./test/site
+          domain: ci.example.com
+          level: '1'
+          dry-run: 'true'
+
+      - name: Check Level 1 was refused
+        env:
+          OUTCOME: ${{ steps.level1.outcome }}
+        run: |
+          test "$OUTCOME" = "failure" || { echo "::error::level 1 should fail, outcome was $OUTCOME"; exit 1; }
+          echo "Level 1 refused, as it should be."
